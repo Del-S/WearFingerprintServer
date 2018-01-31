@@ -18,5 +18,28 @@
 *.tar.gz
 *.rar
 
+# Backup ignore #
+.bak
+.bakup
+
+# Mapping #
+*.map
+.map
+
 # virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*
+
+# Dirs #
+/build
+/lib
+/nbproject
+/test
+/dist/
+/target/
+
+# IDE ignore #
+nb-configuration.xml
+
+
+# Linux
+*~
