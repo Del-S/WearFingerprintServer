@@ -23,6 +23,9 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RestController;
+import static com.couchbase.client.java.query.Select.select;
+import com.couchbase.client.java.query.Statement;
+import static com.couchbase.client.java.query.dsl.Expression.*;
 
 @Controller
 @RestController
@@ -42,16 +45,20 @@ public class FingerprintController {
         
         Cluster cluster = CouchbaseCluster.create();
         cluster.authenticate("admin", "admin123");
-        Bucket bucket = cluster.openBucket("beacon");
-        
-        bucket.bucketManager().createN1qlPrimaryIndex(true, false);
+        Bucket bucket = cluster.openBucket("fingerprint");
         
         List<JSONObject> result = new ArrayList();
         JSONParser parser = new JSONParser();
         
         String timestamp = request.getParameter("timestamp");
-        if(timestamp == null) {
-            N1qlQueryResult queryResult = bucket.query(N1qlQuery.simple("SELECT * FROM `beacon`"));
+        if(timestamp == null) {     
+            Statement statement = select("*").from(i("fingerprint"))
+                        .where( x("_deleted").ne(x("true"))
+                            .or( x("_deleted").isMissing() )
+                            .and( x("_sync").isNotMissing() )
+                        );
+
+            N1qlQueryResult queryResult = bucket.query(N1qlQuery.simple(statement));
             
             try {
             
@@ -65,7 +72,7 @@ public class FingerprintController {
                 e.printStackTrace();
             }
         }
-
+     
         return new ResponseEntity<>(result, null, HttpStatus.OK);
     }
     
