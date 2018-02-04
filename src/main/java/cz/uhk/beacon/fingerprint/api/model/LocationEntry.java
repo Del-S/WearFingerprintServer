@@ -1,6 +1,5 @@
 package cz.uhk.beacon.fingerprint.api.model;
 
-import com.couchbase.client.deps.com.fasterxml.jackson.annotation.JsonIgnore;
 import java.util.Objects;
 
 /**
@@ -9,23 +8,17 @@ import java.util.Objects;
  */
 public class LocationEntry {
 
-    // Database labels for database
-    public final static String DB_TABLE = "location";
-    public final static String DB_ID = "id";
-    public final static String DB_BUILDING = "building";
-    public final static String DB_FLOOR = "floor";
-
     // Variables of this class
-    @JsonIgnore
-    private int id;                 // Database id (its inner id and it is not exported)
     private String building;        // Name of the building
     private int floor;              // Floor number inside the building
+    private String level;           // Level identifier to distinguish floors
 
     // Default constructor used for Gson
     public LocationEntry() {}
 
     // Default constructor used for Gson
     public LocationEntry(String location) {
+        level = location;
         switch(location) {
             case "J1NP":
                 this.building = "UHK";
@@ -46,14 +39,6 @@ public class LocationEntry {
         }
     }
 
-    public int getId() {
-        return id;
-    }
-
-    public void setId(int id) {
-        this.id = id;
-    }
-
     public String getBuilding() {
         return building;
     }
@@ -70,6 +55,14 @@ public class LocationEntry {
         this.floor = floor;
     }
 
+    public String getLevel() {
+        return level;
+    }
+
+    public void setLevel(String level) {
+        this.level = level;
+    }
+    
     @Override
     public boolean equals(java.lang.Object o) {
         if (this == o) {
@@ -81,21 +74,22 @@ public class LocationEntry {
 
         LocationEntry locationEntry = (LocationEntry) o;
         return Objects.equals(this.building, locationEntry.building) &&
-               Objects.equals(this.floor, locationEntry.floor);
+               Objects.equals(this.floor, locationEntry.floor) &&
+               Objects.equals(this.level, locationEntry.level);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(building, floor);
+        return Objects.hash(building, floor, level);
     }
 
 
     @Override
     public String toString() {
         return "class LocationEntry {\n" +
-                "    dbId: " + toIndentedString(id) + "\n" +
                 "    building: " + toIndentedString(building) + "\n" +
                 "    floor: " + toIndentedString(floor) + "\n" +
+                "    level: " + toIndentedString(level) + "\n" +
                 "}";
     }
 

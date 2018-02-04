@@ -15,6 +15,11 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/")
 public class IndexController {
     
+    /**
+     * Index route to check if server is running.
+     * 
+     * @return ResponseEntity with String
+     */
     @RequestMapping(method = RequestMethod.GET)
     public ResponseEntity getIndex() {
         return new ResponseEntity<>("Fingerprint to Android server.", null, HttpStatus.OK);
