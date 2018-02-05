@@ -4,6 +4,7 @@ import com.couchbase.client.deps.com.fasterxml.jackson.databind.ObjectMapper;
 import com.couchbase.client.java.Bucket;
 import com.couchbase.client.java.Cluster;
 import com.couchbase.client.java.CouchbaseCluster;
+import com.couchbase.client.java.document.json.JsonObject;
 import com.couchbase.client.java.query.N1qlQuery;
 import com.couchbase.client.java.query.N1qlQueryResult;
 import com.couchbase.client.java.query.N1qlQueryRow;
@@ -11,11 +12,17 @@ import com.couchbase.client.java.query.Statement;
 import com.couchbase.client.java.query.dsl.Expression;
 import static com.couchbase.client.java.query.Select.select;
 import static com.couchbase.client.java.query.dsl.Expression.*;
+
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import javax.servlet.http.HttpServletRequest;
+
 import org.json.simple.JSONObject;
 import org.json.simple.parser.JSONParser;
+import org.json.simple.parser.ParseException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
@@ -23,28 +30,26 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RestController;
+
+import cz.uhk.beacon.fingerprint.api.model.FingerprintMeta;
 import cz.uhk.beacon.fingerprint.api.model.LocationEntry;
-import java.io.IOException;
-import java.util.logging.Level;
-import java.util.logging.Logger;
-import org.json.simple.parser.ParseException;
 
 @Controller
 @RestController
-@RequestMapping("/fingerprints")
 public class FingerprintController {
     
     private final static String UNAUTHORIZED = "Unauthorized";
+    private final static String BAD_REQUEST = "Data is malformed, please correct the errors and try again.";
     private static final Logger LOGGER = Logger.getLogger("FingerprintController");
     
     /**
-     * Route /fingerprints that loads synchonized fingerprints from specific Couchebase bucket.
+     * Route /fingerprints (GET) that loads synchonized fingerprints from specific Couchebase bucket.
      * - Can be parametrized by timestamp and location.
      * 
      * @param request to handle and get data from
-     * @return ResponseEntity with JSON data
+     * @return ResponseEntity with Fingerprint JSON data
      */
-    @RequestMapping(method = RequestMethod.GET, produces="application/json")
+    @RequestMapping(value = "/fingerprints", method = RequestMethod.GET, produces="application/json")
     public ResponseEntity getFingerprints(HttpServletRequest request) {
         
         // UNAUTHORIZED exception when there is no deviceId in the header
@@ -95,11 +100,7 @@ public class FingerprintController {
         Bucket bucket = cluster.openBucket("fingerprint");
         
         // Create a N1QL Select statement to get fingerprints
-        //Statement statement = select("fingerprint.*, META(fingerprint).id").from(i("fingerprint"))
-            //.where( whereEx );
-        
-        // Create a N1QL Select statement to get fingerprints
-        Statement statement = select("COUNT(*)").from(i("fingerprint"))
+        Statement statement = select("fingerprint.*, META(fingerprint).id").from(i("fingerprint"))
             .where( whereEx );
         
         // Run query on the specific bucket
@@ -120,6 +121,88 @@ public class FingerprintController {
         cluster.disconnect();
      
         // Return calculated data
+        return new ResponseEntity<>(result, null, HttpStatus.OK);
+    }
+    
+    @RequestMapping(value = "/fingerprints", method = RequestMethod.POST, produces="application/json")
+    public ResponseEntity addFingerprints(HttpServletRequest request) {
+        return new ResponseEntity<>("Not implemented yet.", null, HttpStatus.OK);
+    }
+    
+    /**
+     * Route /fingerprints-meta (GET) that gets meta information for specific device.
+     * - Data loaded is count of new fngerprints and last added fingerprint.
+     * 
+     * @param request to handle and get data from
+     * @return ResponseEntity with FingerprintMeta JSON data
+     */
+    @RequestMapping(value = "/fingerprints-meta", method = RequestMethod.GET, produces="application/json")
+    public ResponseEntity getFingerprintMeta(HttpServletRequest request) {
+        
+        // UNAUTHORIZED exception when there is no deviceId in the header
+        String deviceId = request.getHeader("deviceId");
+        if(StringUtils.isEmpty(deviceId)) {
+            return new ResponseEntity<>(UNAUTHORIZED, null, HttpStatus.UNAUTHORIZED);
+        }
+       
+        // Get query timestamp parameter and check if it's in a correct format
+        String timestamp = request.getParameter("timestamp");
+        if(timestamp == null || !isLong(timestamp)) {     
+            return new ResponseEntity<>(BAD_REQUEST, null, HttpStatus.BAD_REQUEST);
+        }
+        
+        // Connect to the Couchebase cluster and open connection to the bucket
+        Cluster cluster = CouchbaseCluster.create();
+        cluster.authenticate("admin", "admin123");
+        Bucket bucket = cluster.openBucket("fingerprint");
+        
+        // Create a N1QL Select for count of new Fingerprints
+        Statement statementCountNew = select("COUNT(*) as countNew").from(i("fingerprint"))
+            .where( x("_deleted").ne(x("true"))
+                .or( x("_deleted").isMissing() )
+                .and( x("_sync").isNotMissing() )
+                .and("timestamp").gt(x(timestamp))
+            );
+        
+        // Create a N1QL Select for timestamp of last added fingerprint by specific device
+        Statement statementLastInsert = select("MAX(timestamp) as lastInsert").from(i("fingerprint"))
+            .where( x("_deleted").ne(x("true"))
+                .or( x("_deleted").isMissing() )
+                .and( x("_sync").isNotMissing() )
+                .and("deviceRecord.telephone").eq(s(deviceId))
+            );
+        
+        // Union query so there is no need to run two of them
+        String queryString = "(" +statementCountNew + ") UNION (" + statementLastInsert + ")";
+        // Run query to get the data
+        N1qlQueryResult query = bucket.query(N1qlQuery.simple(queryString));
+
+        // Result data to display
+        FingerprintMeta result = new FingerprintMeta();
+        try {
+            // Parse N1QL rows into JsonObjects and put data into result
+            query.allRows().forEach((row) -> {
+                JsonObject data = row.value();  // Parse data into JsonObject
+                
+                // Get count of new fingerprints
+                if(data.containsKey("countNew")) {
+                    result.setCountNew( (int) row.value().get("countNew") );
+                }
+                
+                // Get timestamp of last insert by specific device
+                if (data.containsKey("lastInsert")) {
+                    result.setLastInsert( (long) row.value().get("lastInsert") );
+                }
+            });
+        } catch(Exception e) {
+            LOGGER.log(Level.SEVERE, "Cannot convert N1ql row into FingerprintMeta", e);
+        }
+        
+        // Disconnect from the bucket and cluster
+        bucket.close();
+        cluster.disconnect();
+        
+        // Return data
         return new ResponseEntity<>(result, null, HttpStatus.OK);
     }
     

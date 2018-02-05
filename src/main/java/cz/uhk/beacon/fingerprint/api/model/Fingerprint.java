@@ -1,6 +1,7 @@
 package cz.uhk.beacon.fingerprint.api.model;
 
 import com.couchbase.client.deps.com.fasterxml.jackson.annotation.JsonProperty;
+
 import java.util.Objects;
 import java.util.UUID;
 
@@ -195,7 +196,7 @@ public class Fingerprint {
 
     @Override
     public String toString() {
-        return "class BeaconEntry {\n" +
+        return "class Fingerprint {\n" +
                 "    id: " + toIndentedString(id) + "\n" +
                 "    scanID: " + toIndentedString(scanID) + "\n" +
                 "    x: " + toIndentedString(x) + "\n" +
