@@ -1,6 +1,5 @@
 package cz.uhk.beacon.fingerprint.api.controller;
 
-import com.couchbase.client.deps.com.fasterxml.jackson.databind.ObjectMapper;
 import com.couchbase.client.java.Bucket;
 import com.couchbase.client.java.Cluster;
 import com.couchbase.client.java.CouchbaseCluster;
@@ -12,8 +11,13 @@ import com.couchbase.client.java.query.Statement;
 import com.couchbase.client.java.query.dsl.Expression;
 import static com.couchbase.client.java.query.Select.select;
 import static com.couchbase.client.java.query.dsl.Expression.*;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.logging.Level;
@@ -31,6 +35,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RestController;
 
+import cz.uhk.beacon.fingerprint.api.model.Fingerprint;
 import cz.uhk.beacon.fingerprint.api.model.FingerprintMeta;
 import cz.uhk.beacon.fingerprint.api.model.LocationEntry;
 
@@ -38,9 +43,11 @@ import cz.uhk.beacon.fingerprint.api.model.LocationEntry;
 @RestController
 public class FingerprintController {
     
+    private final static String GATEWAY_URL = "http://localhost:4985/fingerprintgw";
     private final static String UNAUTHORIZED = "Unauthorized";
     private final static String BAD_REQUEST = "Data is malformed, please correct the errors and try again.";
     private static final Logger LOGGER = Logger.getLogger("FingerprintController");
+    private final ObjectMapper objectMapper = new ObjectMapper();
     
     /**
      * Route /fingerprints (GET) that loads synchonized fingerprints from specific Couchebase bucket.
@@ -77,7 +84,6 @@ public class FingerprintController {
             // Check if body is not empty
             if(!StringUtils.isEmpty(body)) {
                 // Map string to LocationEntry
-                ObjectMapper objectMapper = new ObjectMapper();
                 locationEntry = objectMapper.readValue(body, LocationEntry.class);
                 
                 // Get level from LocationEntry and modify Query expression
@@ -124,9 +130,67 @@ public class FingerprintController {
         return new ResponseEntity<>(result, null, HttpStatus.OK);
     }
     
+    /**
+     * Route /fingerprints (POST) saves fingerprints into couchebase databse using
+     * sync gateway to enable synchronization.
+     * 
+     * @param request to handle and get data from
+     * @return ResponseEntity with only HTTP code and nothing else
+     */
     @RequestMapping(value = "/fingerprints", method = RequestMethod.POST, produces="application/json")
-    public ResponseEntity addFingerprints(HttpServletRequest request) {
-        return new ResponseEntity<>("Not implemented yet.", null, HttpStatus.OK);
+    public ResponseEntity addFingerprint(HttpServletRequest request) {
+        
+        // UNAUTHORIZED exception when there is no deviceId in the header
+        String deviceId = request.getHeader("deviceId");
+        if(StringUtils.isEmpty(deviceId)) {
+            return new ResponseEntity<>(UNAUTHORIZED, null, HttpStatus.UNAUTHORIZED);
+        }
+        
+        // Parse the request body into an object
+        Fingerprint fingerprint = null;
+        List<Fingerprint> fingerprints = new ArrayList();
+        try {
+            // Get body string from request
+            String body = request.getReader().lines()
+                .reduce("", (accumulator, actual) -> accumulator + actual); 
+
+            // Check if body is not empty
+            if(!StringUtils.isEmpty(body)) {
+                
+                // Map json data to proper objects (list or single fingerprint)
+                if(body.startsWith("[")) {
+                    fingerprints = objectMapper.readValue(body, new TypeReference<List<Fingerprint>>(){});
+                } else {
+                    fingerprint = objectMapper.readValue(body, Fingerprint.class);
+                }
+            }
+        } catch (IOException ex) {
+            LOGGER.log(Level.SEVERE, "Could not convert request body to Fingerprints", ex);
+        }
+        
+        // Check if Json data was mapped to proper objects else return error
+        if( (fingerprint == null && fingerprints.isEmpty()) ||
+                (fingerprint != null && !fingerprint.isValid())) {
+            return new ResponseEntity<>(BAD_REQUEST, null, HttpStatus.BAD_REQUEST);
+        }
+        
+        // If only single fingerprint was mapped then save it into the database
+        if(fingerprint != null && fingerprint.isValid()) {
+            try {
+                saveSingleFingerprint(fingerprint);
+            } catch (IOException ex) {
+                LOGGER.log(Level.SEVERE, "Could not send data to the Sync Gateway", ex);
+                return new ResponseEntity<>(BAD_REQUEST, null, HttpStatus.BAD_REQUEST);
+            }
+        }
+        
+        // Save multiple fingerprint into the database
+        if(!fingerprints.isEmpty()) {
+            saveMultipleFingerprints(fingerprints);
+        }
+        
+        // Result will not inform about errors
+        return new ResponseEntity<>(null, null, HttpStatus.OK);
     }
     
     /**
@@ -224,4 +288,51 @@ public class FingerprintController {
         }
     }
     
+    /**
+     * Saves single fingerprint into Couchebase using Sync Gateway.
+     * 
+     * @param fingerprint to save into the database
+     * @throws IOException 
+     */
+    private void saveSingleFingerprint(Fingerprint fingerprint) throws IOException {
+        // Map fingerprint as json in byte format
+        byte[] data = objectMapper.writeValueAsBytes(fingerprint);    
+        
+        // Calculate call url
+        String url = GATEWAY_URL + "/" + fingerprint.getId();
+        URL requestUrl = new URL(url);
+        
+        // Create HTTP connection
+        HttpURLConnection connection = (HttpURLConnection) requestUrl.openConnection();
+        connection.setRequestMethod("PUT");
+        connection.setRequestProperty("Content-Type", "application/json");
+
+        // Write fingerprint data
+        connection.setDoOutput(true);
+        try (OutputStream os = connection.getOutputStream()) {
+            os.write(data);
+            os.flush();
+        }
+
+        // Check result
+        int responseCode = connection.getResponseCode();
+        if (responseCode < HttpURLConnection.HTTP_OK || responseCode > HttpURLConnection.HTTP_PARTIAL) {
+            throw new IOException("Response (" + responseCode + "): " + connection.getResponseMessage());
+        }
+    }
+    
+    /**
+     * Saves multiple fingerprints into Couchebase using Sync Gateway.
+     * 
+     * @param fingerprints to save into the database
+     */
+    private void saveMultipleFingerprints(List<Fingerprint> fingerprints) {
+        fingerprints.forEach((fingerprint) -> {
+            try {
+                saveSingleFingerprint(fingerprint);
+            } catch (IOException e) {
+                LOGGER.log(Level.SEVERE, "Could not save fingerprint (id: " + fingerprint.getId() + ")", e);
+            }
+        });
+    }
 }

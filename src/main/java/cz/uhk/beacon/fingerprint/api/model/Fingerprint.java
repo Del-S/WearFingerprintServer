@@ -1,14 +1,20 @@
 package cz.uhk.beacon.fingerprint.api.model;
 
-import com.couchbase.client.deps.com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonProperty.Access;
 
 import java.util.Objects;
 import java.util.UUID;
+import org.json.simple.JSONArray;
+import org.json.simple.JSONObject;
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class Fingerprint {
 
     // Variables of this class
-    @JsonProperty("_id")
+    @JsonProperty(access = Access.WRITE_ONLY)
     private UUID id;                                // UUID of this scan
     private UUID scanID;                            // UUID to enable fingerprint grouping
     private int x,y;                                // Calculated X and Y locations
@@ -22,29 +28,19 @@ public class Fingerprint {
      * Use LocationEntry instead
      */
     private String level;
-    private LocationEntry locationEntry;            // Location of fingerprint to enable multiple buildings and floors
-    private String deviceEntry;                // Device that created this fingerprint
-    private String beaconEntries;        // List of beacon entries scanned for this fingerprint
-    private String wirelessEntries;    // List of wireless entries scanned for this fingerprint
-    private String cellularEntries;    // List of cellular entries scanned for this fingerprint
-    private String sensorEntries;        // List of beacon entries scanned for this fingerprint
+    private LocationEntry locationEntry;        // Location of fingerprint to enable multiple buildings and floors
+    @JsonProperty("deviceRecord")
+    private JSONObject deviceEntry;                 // Device that created this fingerprint
+    @JsonProperty("bluetoothRecords")
+    private JSONArray beaconEntries;               // List of beacon entries scanned for this fingerprint
+    @JsonProperty("wirelessRecords")
+    private JSONArray wirelessEntries;             // List of wireless entries scanned for this fingerprint
+    @JsonProperty("cellularRecords")
+    private JSONArray cellularEntries;             // List of cellular entries scanned for this fingerprint
+    @JsonProperty("sensorRecords")
+    private JSONArray sensorEntries;               // List of beacon entries scanned for this fingerprint
 
     public Fingerprint() {
-        // Set id and scan UUID to send into other device
-        id = UUID.randomUUID();
-        scanID = UUID.randomUUID();
-
-        // Initiate lists
-        beaconEntries = "{entries:500}";
-        wirelessEntries = "{entries:300}";
-        cellularEntries = "{entries:200}";
-        sensorEntries = "{entries:300}";
-
-        // Set device
-        deviceEntry = "{\"entries\":\"1\"}";
-
-        // Default scan length is 60s
-        scanLength = 60000;
     }
 
     public UUID getId() {
@@ -122,43 +118,43 @@ public class Fingerprint {
         this.locationEntry = locationEntry;
     }
 
-    public String getDeviceEntry() {
+    public JSONObject getDeviceEntry() {
         return deviceEntry;
     }
 
-    public void setDeviceEntry(String deviceEntry) {
+    public void setDeviceEntry(JSONObject deviceEntry) {
         this.deviceEntry = deviceEntry;
     }
 
-    public String getBeaconEntries() {
+    public JSONArray getBeaconEntries() {
         return beaconEntries;
     }
 
-    public void setBeaconEntries(String beaconEntries) {
+    public void setBeaconEntries(JSONArray beaconEntries) {
         this.beaconEntries = beaconEntries;
     }
 
-    public String getWirelessEntries() {
+    public JSONArray getWirelessEntries() {
         return wirelessEntries;
     }
 
-    public void setWirelessEntries(String wirelessEntries) {
+    public void setWirelessEntries(JSONArray wirelessEntries) {
         this.wirelessEntries = wirelessEntries;
     }
 
-    public String getCellularEntries() {
+    public JSONArray getCellularEntries() {
         return cellularEntries;
     }
 
-    public void setCellularEntries(String cellularEntries) {
+    public void setCellularEntries(JSONArray cellularEntries) {
         this.cellularEntries = cellularEntries;
     }
 
-    public String getSensorEntries() {
+    public JSONArray getSensorEntries() {
         return sensorEntries;
     }
 
-    public void setSensorEntries(String sensorEntries) {
+    public void setSensorEntries(JSONArray sensorEntries) {
         this.sensorEntries = sensorEntries;
     }
 
@@ -193,7 +189,6 @@ public class Fingerprint {
         return Objects.hash(id, scanID, x, y, scanStart, scanEnd, locationEntry, deviceEntry, beaconEntries, wirelessEntries, cellularEntries, sensorEntries);
     }
 
-
     @Override
     public String toString() {
         return "class Fingerprint {\n" +
@@ -204,6 +199,7 @@ public class Fingerprint {
                 "    scanLength: " + toIndentedString(scanLength) + "\n" +
                 "    scanStart: " + toIndentedString(scanStart) + "\n" +
                 "    scanEnd: " + toIndentedString(scanEnd) + "\n" +
+                "    level: " + toIndentedString(level) + "\n" +
                 "    locationEntry: " + toIndentedString(locationEntry) + "\n" +
                 "    deviceEntry: " + toIndentedString(deviceEntry) + "\n" +
                 "    beaconEntriesCount: " + toIndentedString(beaconEntries) + "\n" +
@@ -222,5 +218,19 @@ public class Fingerprint {
             return "null";
         }
         return o.toString().replace("\n", "\n    ");
+    }
+    
+    /**
+     * Checks if this Fingerprint is valid.
+     * 
+     * @return boolean isValid
+     */
+    @JsonIgnore
+    public boolean isValid() {
+        if(this.id == null || this.level == null || this.beaconEntries == null || this.deviceEntry == null) {
+            return false;
+        }
+        
+        return !((this.x == 0 && this.y == 0) || this.scanStart == 0 || this.scanEnd == 0);
     }
 }
