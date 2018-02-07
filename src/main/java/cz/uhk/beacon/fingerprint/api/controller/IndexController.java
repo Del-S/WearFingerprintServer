@@ -8,7 +8,7 @@ import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * REST API controller
+ * REST API controller to check if the server works
  */
 @Controller
 @RestController

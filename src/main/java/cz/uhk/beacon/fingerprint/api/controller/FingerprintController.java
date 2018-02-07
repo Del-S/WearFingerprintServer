@@ -14,6 +14,9 @@ import static com.couchbase.client.java.query.dsl.Expression.*;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
@@ -34,20 +37,36 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.Resource;
 
 import cz.uhk.beacon.fingerprint.api.model.Fingerprint;
 import cz.uhk.beacon.fingerprint.api.model.FingerprintMeta;
 import cz.uhk.beacon.fingerprint.api.model.LocationEntry;
+import org.apache.commons.lang3.math.NumberUtils;
 
+/**
+ * Fingerprint controller that works with couchebase database and sync gateway.
+ * - /fingerprints (GET) loads fingerprint documents
+ * - /fingerprints (POST) saves fingle or multiple fingerprints (via synch gateway)
+ * - /fingerprints-meta (GET) gets last insert time and count of new fingerprints for specific device
+ * API documentation can be found here: https://app.swaggerhub.com/apis/Del-S/FingerprintAPI/1.0.0
+ */
 @Controller
 @RestController
 public class FingerprintController {
-    
     private final static String GATEWAY_URL = "http://localhost:4985/fingerprintgw";
     private final static String UNAUTHORIZED = "Unauthorized";
+    private final static String FORBIDDEN = "Forbidden";
     private final static String BAD_REQUEST = "Data is malformed, please correct the errors and try again.";
     private static final Logger LOGGER = Logger.getLogger("FingerprintController");
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    /**
+     * File with blacklisted device ids
+     */
+    @Value(value = "classpath:blacklist.txt")
+    private Resource blacklist;
     
     /**
      * Route /fingerprints (GET) that loads synchonized fingerprints from specific Couchebase bucket.
@@ -59,10 +78,17 @@ public class FingerprintController {
     @RequestMapping(value = "/fingerprints", method = RequestMethod.GET, produces="application/json")
     public ResponseEntity getFingerprints(HttpServletRequest request) {
         
-        // UNAUTHORIZED exception when there is no deviceId in the header
+        // UNAUTHORIZED exception when there is no proper device id in the header
         String deviceId = request.getHeader("deviceId");
-        if(StringUtils.isEmpty(deviceId)) {
+        if(StringUtils.isEmpty(deviceId) 
+                || !NumberUtils.isCreatable(deviceId) 
+                || deviceId.length() != 15) {
             return new ResponseEntity<>(UNAUTHORIZED, null, HttpStatus.UNAUTHORIZED);
+        }
+        
+        // FORBIDDEN device id has been blacklisted return 403 Forbidden
+        if(isForbidden(deviceId)) {
+            return new ResponseEntity<>(FORBIDDEN, null, HttpStatus.FORBIDDEN);
         }
         
         // Query expression filtering deleted and not synchonized documents
@@ -102,7 +128,7 @@ public class FingerprintController {
         
         // Connect to the Couchebase cluster and open connection to the bucket
         Cluster cluster = CouchbaseCluster.create();
-        cluster.authenticate("admin", "admin123");
+        //cluster.authenticate("admin", "admin123");
         Bucket bucket = cluster.openBucket("fingerprint");
         
         // Create a N1QL Select statement to get fingerprints
@@ -140,10 +166,17 @@ public class FingerprintController {
     @RequestMapping(value = "/fingerprints", method = RequestMethod.POST, produces="application/json")
     public ResponseEntity addFingerprint(HttpServletRequest request) {
         
-        // UNAUTHORIZED exception when there is no deviceId in the header
-        String deviceId = request.getHeader("deviceId");
-        if(StringUtils.isEmpty(deviceId)) {
+        // UNAUTHORIZED exception when there is no proper device id in the header
+        String deviceId = request.getHeader("deviceId");        
+        if(StringUtils.isEmpty(deviceId) 
+                || !NumberUtils.isCreatable(deviceId) 
+                || deviceId.length() != 15) {
             return new ResponseEntity<>(UNAUTHORIZED, null, HttpStatus.UNAUTHORIZED);
+        }
+        
+        // FORBIDDEN device id has been blacklisted return 403 Forbidden
+        if(isForbidden(deviceId)) {
+            return new ResponseEntity<>(FORBIDDEN, null, HttpStatus.FORBIDDEN);
         }
         
         // Parse the request body into an object
@@ -203,10 +236,17 @@ public class FingerprintController {
     @RequestMapping(value = "/fingerprints-meta", method = RequestMethod.GET, produces="application/json")
     public ResponseEntity getFingerprintMeta(HttpServletRequest request) {
         
-        // UNAUTHORIZED exception when there is no deviceId in the header
+        // UNAUTHORIZED exception when there is no proper device id in the header
         String deviceId = request.getHeader("deviceId");
-        if(StringUtils.isEmpty(deviceId)) {
+        if(StringUtils.isEmpty(deviceId) 
+                || !NumberUtils.isCreatable(deviceId) 
+                || deviceId.length() != 15) {
             return new ResponseEntity<>(UNAUTHORIZED, null, HttpStatus.UNAUTHORIZED);
+        }
+        
+        // FORBIDDEN device id has been blacklisted return 403 Forbidden
+        if(isForbidden(deviceId)) {
+            return new ResponseEntity<>(FORBIDDEN, null, HttpStatus.FORBIDDEN);
         }
        
         // Get query timestamp parameter and check if it's in a correct format
@@ -217,7 +257,7 @@ public class FingerprintController {
         
         // Connect to the Couchebase cluster and open connection to the bucket
         Cluster cluster = CouchbaseCluster.create();
-        cluster.authenticate("admin", "admin123");
+        //cluster.authenticate("admin", "admin123");
         Bucket bucket = cluster.openBucket("fingerprint");
         
         // Create a N1QL Select for count of new Fingerprints
@@ -334,5 +374,32 @@ public class FingerprintController {
                 LOGGER.log(Level.SEVERE, "Could not save fingerprint (id: " + fingerprint.getId() + ")", e);
             }
         });
+    }
+    
+    /**
+     * Check if the device is forbidden based on device ID
+     * 
+     * @param deviceId 15 digit number as string
+     * @return boolean isForbidden or not
+     */
+    public boolean isForbidden(String deviceId){        
+        try {
+            // Load data from blacklist file
+            final InputStream inputStream = blacklist.getInputStream();
+            try (BufferedReader br = new BufferedReader(new InputStreamReader(inputStream), 1024)) {
+                // Check if there is a line with device ID
+                String line;
+                while ((line = br.readLine()) != null) {
+                    // If there is the device is forbidden
+                    if(line.equals(deviceId)) 
+                        return true;
+                }
+            }
+        } catch (IOException e) {
+            LOGGER.log(Level.WARNING, "Could not load blacklist data.", e);
+        }
+        
+        // If there is not deviceId or there was an error device is allowed
+        return false;
     }
 }

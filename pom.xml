@@ -4,7 +4,7 @@
 
     <groupId>cz.uhk.beacon</groupId>
     <artifactId>FingerpintAPI</artifactId>
-    <version>0.1</version>
+    <version>1.0</version>
     <packaging>war</packaging>
 
     <name>FingerpintAPI</name>
@@ -24,6 +24,12 @@
             <artifactId>javaee-web-api</artifactId>
             <version>7.0</version>
             <scope>provided</scope>
+        </dependency>
+        
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+            <version>3.7</version>
         </dependency>
         
         <!-- Core utilities used by other modules. Define this if you use Spring 
@@ -114,11 +120,11 @@
         </dependency>
         
         <!-- https://mvnrepository.com/artifact/com.googlecode.json-simple/json-simple -->
-<dependency>
-    <groupId>com.googlecode.json-simple</groupId>
-    <artifactId>json-simple</artifactId>
-    <version>1.1</version>
-</dependency>
+        <dependency>
+            <groupId>com.googlecode.json-simple</groupId>
+            <artifactId>json-simple</artifactId>
+            <version>1.1</version>
+        </dependency>
 
     </dependencies>
     
