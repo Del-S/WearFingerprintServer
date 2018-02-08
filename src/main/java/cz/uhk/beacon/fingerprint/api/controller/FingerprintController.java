@@ -12,6 +12,7 @@ import com.couchbase.client.java.query.dsl.Expression;
 import static com.couchbase.client.java.query.Select.select;
 import static com.couchbase.client.java.query.dsl.Expression.*;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.io.BufferedReader;
@@ -43,10 +44,15 @@ import org.springframework.core.io.Resource;
 import cz.uhk.beacon.fingerprint.api.model.Fingerprint;
 import cz.uhk.beacon.fingerprint.api.model.FingerprintMeta;
 import cz.uhk.beacon.fingerprint.api.model.LocationEntry;
+import java.io.PrintWriter;
+import javax.annotation.PostConstruct;
+import javax.servlet.ServletOutputStream;
+import javax.servlet.http.HttpServletResponse;
 import org.apache.commons.lang3.math.NumberUtils;
+import org.springframework.beans.factory.annotation.Autowired;
 
 /**
- * Fingerprint controller that works with couchebase database and sync gateway.
+ * Fingerprint controller that works with couchbase database and sync gateway.
  * - /fingerprints (GET) loads fingerprint documents
  * - /fingerprints (POST) saves fingle or multiple fingerprints (via synch gateway)
  * - /fingerprints-meta (GET) gets last insert time and count of new fingerprints for specific device
@@ -60,7 +66,9 @@ public class FingerprintController {
     private final static String FORBIDDEN = "Forbidden";
     private final static String BAD_REQUEST = "Data is malformed, please correct the errors and try again.";
     private static final Logger LOGGER = Logger.getLogger("FingerprintController");
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper = new ObjectMapper()
+            .enable(DeserializationFeature.ACCEPT_SINGLE_VALUE_AS_ARRAY);
+    private static final Cluster COUCH_CLUSTER = CouchbaseCluster.create();
 
     /**
      * File with blacklisted device ids
@@ -68,15 +76,22 @@ public class FingerprintController {
     @Value(value = "classpath:blacklist.txt")
     private Resource blacklist;
     
+    /*@PostConstruct
+    public void init() {
+        COUCH_CLUSTER.authenticate("admin", "admin123");
+    }*/
+    
     /**
      * Route /fingerprints (GET) that loads synchonized fingerprints from specific Couchebase bucket.
      * - Can be parametrized by timestamp and location.
      * 
      * @param request to handle and get data from
-     * @return ResponseEntity with Fingerprint JSON data
+     * @param response to write data into
      */
     @RequestMapping(value = "/fingerprints", method = RequestMethod.GET, produces="application/json")
-    public ResponseEntity getFingerprints(HttpServletRequest request) {
+    public ResponseEntity getFingerprints(HttpServletRequest request, HttpServletResponse response) {
+        
+        response.setContentType("application/json");
         
         // UNAUTHORIZED exception when there is no proper device id in the header
         String deviceId = request.getHeader("deviceId");
@@ -122,38 +137,37 @@ public class FingerprintController {
             LOGGER.log(Level.WARNING, "Cannot convert request body to LocationEntry", ex);
         }
         
-        // Initiate result and JSON variables
-        List<JSONObject> result = new ArrayList();
-        JSONParser parser = new JSONParser();
-        
-        // Connect to the Couchebase cluster and open connection to the bucket
-        Cluster cluster = CouchbaseCluster.create();
-        //cluster.authenticate("admin", "admin123");
-        Bucket bucket = cluster.openBucket("fingerprint");
-        
         // Create a N1QL Select statement to get fingerprints
         Statement statement = select("fingerprint.*, META(fingerprint).id").from(i("fingerprint"))
-            .where( whereEx );
+            .where( whereEx );        
+        Bucket bucket = COUCH_CLUSTER.openBucket("fingerprint");                    // Connect to the Couchebase cluster and open connection to the bucket
+        N1qlQueryResult queryResult = bucket.query(N1qlQuery.simple(statement));    // Run query on the specific bucket
+        bucket.close();                                                             // Disconnect from the bucket and cluster
         
-        // Run query on the specific bucket
-        N1qlQueryResult queryResult = bucket.query(N1qlQuery.simple(statement));
-
+        // Load response printer to print data into
+        PrintWriter printer = null;
         try {
-            // Parse N1QL rows into JSON objects
-            for (N1qlQueryRow row : queryResult.allRows()) {
-                String json = new String(row.byteValue());                 
-                result.add((JSONObject) parser.parse(json));
-            }
-        } catch(ParseException e) {
+            printer = response.getWriter();
+        } catch(IOException e) {
             LOGGER.log(Level.SEVERE, "Cannot convert N1ql row into JSONObject", e);
         }
-            
-        // Disconnect from the bucket and cluster
-        bucket.close();
-        cluster.disconnect();
-     
-        // Return calculated data
-        return new ResponseEntity<>(result, null, HttpStatus.OK);
+        
+        // Parse N1QL rows into JSON objects
+        Fingerprint fingerprint;
+        for (N1qlQueryRow row : queryResult.allRows()) {
+            try {
+                if(printer != null) {
+                    // Parse objects
+                    fingerprint = objectMapper.readValue(row.byteValue(), Fingerprint.class);
+                    printer.print(objectMapper.writeValueAsString(fingerprint));
+                }
+            } catch(IOException e) {
+                LOGGER.log(Level.SEVERE, "Cannot convert N1ql row into JSONObject", e);
+            } 
+        }
+
+        // Return 200 after data print completion
+        return new ResponseEntity<>(null, null, HttpStatus.OK);
     }
     
     /**
@@ -256,9 +270,7 @@ public class FingerprintController {
         }
         
         // Connect to the Couchebase cluster and open connection to the bucket
-        Cluster cluster = CouchbaseCluster.create();
-        //cluster.authenticate("admin", "admin123");
-        Bucket bucket = cluster.openBucket("fingerprint");
+        Bucket bucket = COUCH_CLUSTER.openBucket("fingerprint");
         
         // Create a N1QL Select for count of new Fingerprints
         Statement statementCountNew = select("COUNT(*) as countNew").from(i("fingerprint"))
@@ -304,7 +316,6 @@ public class FingerprintController {
         
         // Disconnect from the bucket and cluster
         bucket.close();
-        cluster.disconnect();
         
         // Return data
         return new ResponseEntity<>(result, null, HttpStatus.OK);
