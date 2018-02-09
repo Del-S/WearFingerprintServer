@@ -6,6 +6,7 @@
        xmlns:aop="http://www.springframework.org/schema/aop"
        xmlns:mvc="http://www.springframework.org/schema/mvc" 
        xmlns:context="http://www.springframework.org/schema/context"
+       xmlns:couchbase="http://www.springframework.org/schema/data/couchbase"
        xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-4.0.xsd
             http://www.springframework.org/schema/mvc http://www.springframework.org/schema/mvc/spring-mvc-3.1.xsd
             http://www.springframework.org/schema/aop http://www.springframework.org/schema/aop/spring-aop-4.0.xsd
@@ -15,5 +16,5 @@
     <context:annotation-config />
     <context:property-placeholder />
     <mvc:annotation-driven />
-    
+
 </beans>

@@ -11,7 +11,10 @@ import com.couchbase.client.java.query.Statement;
 import com.couchbase.client.java.query.dsl.Expression;
 import static com.couchbase.client.java.query.Select.select;
 import static com.couchbase.client.java.query.dsl.Expression.*;
+import com.couchbase.client.java.query.dsl.path.GroupByPath;
+import com.couchbase.client.java.query.dsl.path.OffsetPath;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.io.BufferedReader;
@@ -19,6 +22,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.io.PrintWriter;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.ArrayList;
@@ -26,10 +30,9 @@ import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
 
-import org.json.simple.JSONObject;
-import org.json.simple.parser.JSONParser;
-import org.json.simple.parser.ParseException;
+import org.apache.commons.lang3.math.NumberUtils;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
@@ -43,10 +46,9 @@ import org.springframework.core.io.Resource;
 import cz.uhk.beacon.fingerprint.api.model.Fingerprint;
 import cz.uhk.beacon.fingerprint.api.model.FingerprintMeta;
 import cz.uhk.beacon.fingerprint.api.model.LocationEntry;
-import org.apache.commons.lang3.math.NumberUtils;
 
 /**
- * Fingerprint controller that works with couchebase database and sync gateway.
+ * Fingerprint controller that works with couchbase database and sync gateway.
  * - /fingerprints (GET) loads fingerprint documents
  * - /fingerprints (POST) saves fingle or multiple fingerprints (via synch gateway)
  * - /fingerprints-meta (GET) gets last insert time and count of new fingerprints for specific device
@@ -60,7 +62,9 @@ public class FingerprintController {
     private final static String FORBIDDEN = "Forbidden";
     private final static String BAD_REQUEST = "Data is malformed, please correct the errors and try again.";
     private static final Logger LOGGER = Logger.getLogger("FingerprintController");
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper = new ObjectMapper()
+            .enable(DeserializationFeature.ACCEPT_SINGLE_VALUE_AS_ARRAY);
+    private static final Cluster COUCH_CLUSTER = CouchbaseCluster.create();
 
     /**
      * File with blacklisted device ids
@@ -68,15 +72,24 @@ public class FingerprintController {
     @Value(value = "classpath:blacklist.txt")
     private Resource blacklist;
     
+    /*@PostConstruct
+    public void init() {
+        COUCH_CLUSTER.authenticate("admin", "admin123");
+    }*/
+    
     /**
      * Route /fingerprints (GET) that loads synchonized fingerprints from specific Couchebase bucket.
      * - Can be parametrized by timestamp and location.
      * 
      * @param request to handle and get data from
-     * @return ResponseEntity with Fingerprint JSON data
+     * @param response to write data into
+     * @return ResponseEntity with HTTP code and message
      */
     @RequestMapping(value = "/fingerprints", method = RequestMethod.GET, produces="application/json")
-    public ResponseEntity getFingerprints(HttpServletRequest request) {
+    public ResponseEntity getFingerprints(HttpServletRequest request, HttpServletResponse response) {
+        
+        // Set response as JSON just to be sure
+        response.setContentType("application/json");
         
         // UNAUTHORIZED exception when there is no proper device id in the header
         String deviceId = request.getHeader("deviceId");
@@ -90,70 +103,37 @@ public class FingerprintController {
         if(isForbidden(deviceId)) {
             return new ResponseEntity<>(FORBIDDEN, null, HttpStatus.FORBIDDEN);
         }
-        
-        // Query expression filtering deleted and not synchonized documents
-        Expression whereEx = x("_deleted").ne(x("true"))
-            .or( x("_deleted").isMissing() )
-            .and( x("_sync").isNotMissing() );
-        
-        // Get query timestamp parameter and modify Query expression
-        String timestamp = request.getParameter("timestamp");
-        if(timestamp != null && isLong(timestamp)) {     
-            whereEx = whereEx.and("timestamp").gt(x(timestamp));
-        }
-        
-        // Parse the request body into an object
-        LocationEntry locationEntry;
-        try {
-            String body = request.getReader().lines()
-                .reduce("", (accumulator, actual) -> accumulator + actual); 
-            // Check if body is not empty
-            if(!StringUtils.isEmpty(body)) {
-                // Map string to LocationEntry
-                locationEntry = objectMapper.readValue(body, LocationEntry.class);
-                
-                // Get level from LocationEntry and modify Query expression
-                String level = locationEntry.getLevel();
-                if(!StringUtils.isEmpty(level)) {
-                    whereEx = whereEx.and("level").eq(s(level));
-                }
-            }
-        } catch (IOException ex) {
-            LOGGER.log(Level.WARNING, "Cannot convert request body to LocationEntry", ex);
-        }
-        
-        // Initiate result and JSON variables
-        List<JSONObject> result = new ArrayList();
-        JSONParser parser = new JSONParser();
-        
-        // Connect to the Couchebase cluster and open connection to the bucket
-        Cluster cluster = CouchbaseCluster.create();
-        //cluster.authenticate("admin", "admin123");
-        Bucket bucket = cluster.openBucket("fingerprint");
-        
-        // Create a N1QL Select statement to get fingerprints
-        Statement statement = select("fingerprint.*, META(fingerprint).id").from(i("fingerprint"))
-            .where( whereEx );
-        
-        // Run query on the specific bucket
-        N1qlQueryResult queryResult = bucket.query(N1qlQuery.simple(statement));
 
+        // Create a N1QL Select statement to get fingerprints
+        Statement queryStatement = createQueryStatement(request);        
+        Bucket bucket = COUCH_CLUSTER.openBucket("fingerprint");                        // Connect to the Couchebase cluster and open connection to the bucket
+        N1qlQueryResult queryResult = bucket.query(N1qlQuery.simple(queryStatement));   // Run query on the specific bucket
+        bucket.close();                                                                 // Disconnect from the bucket and cluster
+        
+        // Load response printer to print data into
+        PrintWriter printer = null;
         try {
-            // Parse N1QL rows into JSON objects
-            for (N1qlQueryRow row : queryResult.allRows()) {
-                String json = new String(row.byteValue());                 
-                result.add((JSONObject) parser.parse(json));
-            }
-        } catch(ParseException e) {
+            printer = response.getWriter();
+        } catch(IOException e) {
             LOGGER.log(Level.SEVERE, "Cannot convert N1ql row into JSONObject", e);
         }
-            
-        // Disconnect from the bucket and cluster
-        bucket.close();
-        cluster.disconnect();
-     
-        // Return calculated data
-        return new ResponseEntity<>(result, null, HttpStatus.OK);
+        
+        // Parse N1QL rows into JSON objects
+        Fingerprint fingerprint;
+        for (N1qlQueryRow row : queryResult.allRows()) {
+            try {
+                if(printer != null) {
+                    // Parse raw data into objects and to JSON string
+                    fingerprint = objectMapper.readValue(row.byteValue(), Fingerprint.class);
+                    printer.print(objectMapper.writeValueAsString(fingerprint));
+                }
+            } catch(IOException e) {
+                LOGGER.log(Level.SEVERE, "Cannot convert N1ql row into JSONObject", e);
+            } 
+        }
+
+        // Return 200 after data print completion
+        return new ResponseEntity<>(null, null, HttpStatus.OK);
     }
     
     /**
@@ -256,9 +236,7 @@ public class FingerprintController {
         }
         
         // Connect to the Couchebase cluster and open connection to the bucket
-        Cluster cluster = CouchbaseCluster.create();
-        //cluster.authenticate("admin", "admin123");
-        Bucket bucket = cluster.openBucket("fingerprint");
+        Bucket bucket = COUCH_CLUSTER.openBucket("fingerprint");
         
         // Create a N1QL Select for count of new Fingerprints
         Statement statementCountNew = select("COUNT(*) as countNew").from(i("fingerprint"))
@@ -304,28 +282,83 @@ public class FingerprintController {
         
         // Disconnect from the bucket and cluster
         bucket.close();
-        cluster.disconnect();
         
         // Return data
         return new ResponseEntity<>(result, null, HttpStatus.OK);
     }
     
     /**
-     * Checks if String can be converted to Long.
-     * Used with checking timestamps.
+     * Creates query for fingerprints. Can be midified by:
+     * - Timestamp = Fingerprints with higher timestamp will be queried.
+     * - Limit and offset - works the same as in SQL limiting the data.
+     * - LocationEntry - Query only documents by specific location
      * 
-     * @param string to convert
-     * @return boolean
+     * @param request to get parameter data from
+     * @return N1ql statement for fingerprints
      */
-    private boolean isLong(String string) {
-        try{ 
-            Long.parseLong( string ); 
-            return true;
+    private Statement createQueryStatement(HttpServletRequest request) {
+        // Query expression filtering deleted and not synchonized documents
+        Expression whereEx = x("_deleted").ne(x("true"))
+            .or( x("_deleted").isMissing() )
+            .and( x("_sync").isNotMissing() );
+        
+        // Get query timestamp parameter and modify Query expression
+        String timestamp = request.getParameter("timestamp");
+        if(timestamp != null && isLong(timestamp)) {     
+            whereEx = whereEx.and("timestamp").gt(x(timestamp));
         }
-        catch(NumberFormatException e){
-            LOGGER.log(Level.WARNING, "Cannot convert " + string + " to long.", e);
-            return false;
+        
+        // Parse the request body into an object
+        LocationEntry locationEntry;
+        try {
+            String body = request.getReader().lines()
+                .reduce("", (accumulator, actual) -> accumulator + actual); 
+            // Check if body is not empty
+            if(!StringUtils.isEmpty(body)) {
+                // Map string to LocationEntry
+                locationEntry = objectMapper.readValue(body, LocationEntry.class);
+                
+                // Get level from LocationEntry and modify Query expression
+                String level = locationEntry.getLevel();
+                if(!StringUtils.isEmpty(level)) {
+                    whereEx = whereEx.and("level").eq(s(level));
+                }
+            }
+        } catch (IOException ex) {
+            LOGGER.log(Level.WARNING, "Cannot convert request body to LocationEntry", ex);
         }
+        
+        // Initiate statement required variables
+        Statement selectStatement = null;
+        OffsetPath selectWithLimit = null;
+        // Select with where clause
+        GroupByPath selectWhere = select("fingerprint.*, META(fingerprint).id").from(i("fingerprint"))
+            .where( whereEx );
+        
+        // Get query limit parameter and modify select statement
+        String limit = request.getParameter("limit");
+        if(limit != null && NumberUtils.isCreatable(limit)) {     
+            selectWithLimit = selectWhere.limit(NumberUtils.toInt(limit));
+        }
+        
+        // Get query offset and modify either selectWithLimit or selectWhere to create statemenent
+        String offset = request.getParameter("offset");
+        if(offset != null && NumberUtils.isCreatable(offset)) {  
+            int offsetNumber = NumberUtils.toInt(offset);
+            if(selectWithLimit != null) {
+                selectStatement = selectWithLimit.offset(offsetNumber);
+            } else {
+                selectStatement = selectWhere.offset(offsetNumber);
+            }
+        }
+        
+        // If the statement was not created selectWhere is used instead
+        if(selectStatement == null) {
+            selectStatement = selectWhere;
+        }
+        
+        // Return completed statement
+        return selectStatement;
     }
     
     /**
@@ -401,5 +434,23 @@ public class FingerprintController {
         
         // If there is not deviceId or there was an error device is allowed
         return false;
+    }
+    
+    /**
+     * Checks if String can be converted to Long.
+     * Used with checking timestamps.
+     * 
+     * @param string to convert
+     * @return boolean
+     */
+    private boolean isLong(String string) {
+        try{ 
+            Long.parseLong( string ); 
+            return true;
+        }
+        catch(NumberFormatException e){
+            LOGGER.log(Level.WARNING, "Cannot convert " + string + " to long.", e);
+            return false;
+        }
     }
 }

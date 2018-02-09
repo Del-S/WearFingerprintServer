@@ -3,11 +3,12 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>cz.uhk.beacon</groupId>
-    <artifactId>FingerpintAPI</artifactId>
-    <version>1.0</version>
+    <artifactId>FingerprintAPI</artifactId>
+    <version>1.0.1</version>
     <packaging>war</packaging>
 
-    <name>FingerpintAPI</name>
+    <name>FingerprintAPI</name>
+    <description>Server that handles Fingerprint synchronization between Android device and Couchebase database.</description>
 
     <properties>
         <endorsed.dir>${project.build.directory}/endorsed</endorsed.dir>
