@@ -119,17 +119,28 @@ public class FingerprintController {
         }
         
         // Parse N1QL rows into JSON objects
-        Fingerprint fingerprint;
-        for (N1qlQueryRow row : queryResult.allRows()) {
-            try {
-                if(printer != null) {
+        Fingerprint fingerprint;        // Used to parse json to Fingerprint to check consistency
+        int rowCount = 0;               // Count of rows parsed
+        List<N1qlQueryRow> rows = queryResult.allRows();    // Get all the rows from the query
+        // Check if there is any data and printer was initialized
+        if(rows.size() > 0 && printer != null) {
+            printer.print("[");     // Print start of an array
+            // For every row we print the data
+            for (N1qlQueryRow row : rows) {
+                try {
                     // Parse raw data into objects and to JSON string
                     fingerprint = objectMapper.readValue(row.byteValue(), Fingerprint.class);
                     printer.print(objectMapper.writeValueAsString(fingerprint));
-                }
-            } catch(IOException e) {
-                LOGGER.log(Level.SEVERE, "Cannot convert N1ql row into JSONObject", e);
-            } 
+                    // Print delimiter between objects
+                    if(rowCount < (rows.size() - 1)) {
+                        printer.print(",");
+                    }
+                    rowCount++; // Increase the count of printed objects
+                } catch(IOException e) {
+                    LOGGER.log(Level.SEVERE, "Cannot convert N1ql row into JSONObject", e);
+                } 
+            }
+            printer.print("]");     // Print an end of an array
         }
 
         // Return 200 after data print completion
@@ -273,7 +284,10 @@ public class FingerprintController {
                 
                 // Get timestamp of last insert by specific device
                 if (data.containsKey("lastInsert")) {
-                    result.setLastInsert( (long) row.value().get("lastInsert") );
+                    Object insert = row.value().get("lastInsert");
+                    if(insert != null) {
+                        result.setLastInsert( (long) insert );
+                    }
                 }
             });
         } catch(Exception e) {

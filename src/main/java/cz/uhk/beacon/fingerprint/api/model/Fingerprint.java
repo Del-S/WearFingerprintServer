@@ -3,7 +3,6 @@ package cz.uhk.beacon.fingerprint.api.model;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.fasterxml.jackson.annotation.JsonProperty.Access;
 
 import java.util.Objects;
 import java.util.UUID;
@@ -14,7 +13,6 @@ import org.json.simple.JSONObject;
 public class Fingerprint {
 
     // Variables of this class
-    @JsonProperty(access = Access.WRITE_ONLY)
     private UUID id;                                // UUID of this scan
     private UUID scanID;                            // UUID to enable fingerprint grouping
     private int x,y;                                // Calculated X and Y locations
