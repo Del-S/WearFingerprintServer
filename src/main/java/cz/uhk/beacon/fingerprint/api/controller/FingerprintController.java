@@ -11,7 +11,8 @@ import com.couchbase.client.java.query.Statement;
 import com.couchbase.client.java.query.dsl.Expression;
 import static com.couchbase.client.java.query.Select.select;
 import static com.couchbase.client.java.query.dsl.Expression.*;
-import com.couchbase.client.java.query.dsl.path.GroupByPath;
+import com.couchbase.client.java.query.dsl.Sort;
+import com.couchbase.client.java.query.dsl.path.LimitPath;
 import com.couchbase.client.java.query.dsl.path.OffsetPath;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.DeserializationFeature;
@@ -346,10 +347,11 @@ public class FingerprintController {
         Statement selectStatement = null;
         OffsetPath selectWithLimit = null;
         // Select with where clause
-        GroupByPath selectWhere = select("fingerprint.*, META(fingerprint).id,"
+        LimitPath selectWhere = select("fingerprint.*, META(fingerprint).id,"
                 + " STR_TO_MILLIS(_sync.time_saved) as updateTime")
             .from(i("fingerprint"))
-            .where( whereEx );
+            .where( whereEx )
+            .orderBy(Sort.asc("_sync.time_saved"));
         
         // Get query limit parameter and modify select statement
         String limit = request.getParameter("limit");
