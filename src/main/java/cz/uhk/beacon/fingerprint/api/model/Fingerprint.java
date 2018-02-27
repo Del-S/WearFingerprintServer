@@ -21,10 +21,6 @@ public class Fingerprint {
     private long scanStart;                         // Timestamps of scan start
     @JsonProperty("finish")
     private long  scanEnd;                          // Timestamps of scan end
-    /**
-     * @Deprecated
-     * Use LocationEntry instead
-     */
     private String level;
     private LocationEntry locationEntry;        // Location of fingerprint to enable multiple buildings and floors
     @JsonProperty("deviceRecord")
@@ -37,6 +33,7 @@ public class Fingerprint {
     private JSONArray cellularEntries;             // List of cellular entries scanned for this fingerprint
     @JsonProperty("sensorRecords")
     private JSONArray sensorEntries;               // List of beacon entries scanned for this fingerprint
+    private long updateTime;
 
     public Fingerprint() {
     }
@@ -154,6 +151,14 @@ public class Fingerprint {
 
     public void setSensorEntries(JSONArray sensorEntries) {
         this.sensorEntries = sensorEntries;
+    }
+    
+    public long getUpdateTime() {
+        return updateTime;
+    }
+
+    public void setUpdateTime(long updateTime) {
+        this.updateTime = updateTime;
     }
 
     @Override

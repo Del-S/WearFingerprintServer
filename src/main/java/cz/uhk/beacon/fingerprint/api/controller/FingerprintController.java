@@ -254,7 +254,7 @@ public class FingerprintController {
             .where( x("_deleted").ne(x("true"))
                 .or( x("_deleted").isMissing() )
                 .and( x("_sync").isNotMissing() )
-                .and("timestamp").gt(x(timestamp))
+                .and(x("STR_TO_MILLIS(_sync.time_saved)")).gt(x(timestamp))
             );
         
         // Create a N1QL Select for timestamp of last added fingerprint by specific device
@@ -319,7 +319,7 @@ public class FingerprintController {
         // Get query timestamp parameter and modify Query expression
         String timestamp = request.getParameter("timestamp");
         if(timestamp != null && isLong(timestamp)) {     
-            whereEx = whereEx.and("timestamp").gt(x(timestamp));
+            whereEx = whereEx.and(x("STR_TO_MILLIS(_sync.time_saved)")).gt(x(timestamp));
         }
         
         // Parse the request body into an object
@@ -346,7 +346,9 @@ public class FingerprintController {
         Statement selectStatement = null;
         OffsetPath selectWithLimit = null;
         // Select with where clause
-        GroupByPath selectWhere = select("fingerprint.*, META(fingerprint).id").from(i("fingerprint"))
+        GroupByPath selectWhere = select("fingerprint.*, META(fingerprint).id,"
+                + " STR_TO_MILLIS(_sync.time_saved) as updateTime")
+            .from(i("fingerprint"))
             .where( whereEx );
         
         // Get query limit parameter and modify select statement
@@ -373,6 +375,21 @@ public class FingerprintController {
         
         // Return completed statement
         return selectStatement;
+    }
+    
+    /**
+     * Saves multiple fingerprints into Couchebase using Sync Gateway.
+     * 
+     * @param fingerprints to save into the database
+     */
+    private void saveMultipleFingerprints(List<Fingerprint> fingerprints) {
+        fingerprints.forEach((fingerprint) -> {
+            try {
+                saveSingleFingerprint(fingerprint);
+            } catch (IOException e) {
+                LOGGER.log(Level.SEVERE, "Could not save fingerprint (id: " + fingerprint.getId() + ")", e);
+            }
+        });
     }
     
     /**
@@ -407,22 +424,7 @@ public class FingerprintController {
             throw new IOException("Response (" + responseCode + "): " + connection.getResponseMessage());
         }
     }
-    
-    /**
-     * Saves multiple fingerprints into Couchebase using Sync Gateway.
-     * 
-     * @param fingerprints to save into the database
-     */
-    private void saveMultipleFingerprints(List<Fingerprint> fingerprints) {
-        fingerprints.forEach((fingerprint) -> {
-            try {
-                saveSingleFingerprint(fingerprint);
-            } catch (IOException e) {
-                LOGGER.log(Level.SEVERE, "Could not save fingerprint (id: " + fingerprint.getId() + ")", e);
-            }
-        });
-    }
-    
+
     /**
      * Check if the device is forbidden based on device ID
      * 
