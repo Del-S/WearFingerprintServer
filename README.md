@@ -9,6 +9,6 @@ Main routes are:
 
 Note: Device can be blacklisted from accessing this API by adding it's IMEI device id to file `blacklist.txt` in `source/main/resources`.
 
-API documentation can be found here: https://app.swaggerhub.com/apis/Del-S/FingerprintAPI/1.0.1
+API documentation can be found here: https://app.swaggerhub.com/apis/Del-S/FingerprintAPI/
 
 
