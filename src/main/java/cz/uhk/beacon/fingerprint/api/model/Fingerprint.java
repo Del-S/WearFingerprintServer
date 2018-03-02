@@ -33,7 +33,6 @@ public class Fingerprint {
     private JSONArray cellularEntries;             // List of cellular entries scanned for this fingerprint
     @JsonProperty("sensorRecords")
     private JSONArray sensorEntries;               // List of beacon entries scanned for this fingerprint
-    private long updateTime;
 
     public Fingerprint() {
     }
@@ -153,14 +152,6 @@ public class Fingerprint {
         this.sensorEntries = sensorEntries;
     }
     
-    public long getUpdateTime() {
-        return updateTime;
-    }
-
-    public void setUpdateTime(long updateTime) {
-        this.updateTime = updateTime;
-    }
-
     @Override
     public boolean equals(Object o) {
         if (this == o) {
