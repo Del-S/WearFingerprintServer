@@ -47,6 +47,7 @@ import org.springframework.core.io.Resource;
 import cz.uhk.beacon.fingerprint.api.model.Fingerprint;
 import cz.uhk.beacon.fingerprint.api.model.FingerprintMeta;
 import cz.uhk.beacon.fingerprint.api.model.LocationEntry;
+import javax.annotation.PostConstruct;
 
 /**
  * Fingerprint controller that works with couchbase database and sync gateway.
@@ -73,10 +74,10 @@ public class FingerprintController {
     @Value(value = "classpath:blacklist.txt")
     private Resource blacklist;
     
-    /*@PostConstruct
+    @PostConstruct
     public void init() {
         COUCH_CLUSTER.authenticate("admin", "admin123");
-    }*/
+    }
     
     /**
      * Route /fingerprints (GET) that loads synchonized fingerprints from specific Couchebase bucket.
@@ -106,7 +107,7 @@ public class FingerprintController {
         }
 
         // Create a N1QL Select statement to get fingerprints
-        Statement queryStatement = createQueryStatement(request);        
+        Statement queryStatement = createQueryStatement(request, null, null);        
         Bucket bucket = COUCH_CLUSTER.openBucket("fingerprint");                        // Connect to the Couchebase cluster and open connection to the bucket
         N1qlQueryResult queryResult = bucket.query(N1qlQuery.simple(queryStatement));   // Run query on the specific bucket
         bucket.close();                                                                 // Disconnect from the bucket and cluster
@@ -116,7 +117,7 @@ public class FingerprintController {
         try {
             printer = response.getWriter();
         } catch(IOException e) {
-            LOGGER.log(Level.SEVERE, "Cannot convert N1ql row into JSONObject", e);
+            LOGGER.log(Level.SEVERE, "Could not load printer instance", e);
         }
         
         // Parse N1QL rows into JSON objects
@@ -303,6 +304,79 @@ public class FingerprintController {
     }
     
     /**
+     * 
+     * @param request to handle and get data from
+     * @param response to write data into
+     * @return ResponseEntity with HTTP code and message
+     */
+    @RequestMapping(value = "/dump", method = RequestMethod.GET, produces="application/json")
+    public ResponseEntity dumpFingerprints(HttpServletRequest request, HttpServletResponse response) {
+        
+        // Set response as JSON just to be sure
+        response.setContentType("application/json");
+        
+        // UNAUTHORIZED exception when there is no proper device id in the header
+        String deviceId = request.getHeader("deviceId");
+        if(StringUtils.isEmpty(deviceId) 
+                || !NumberUtils.isCreatable(deviceId) 
+                || deviceId.length() != 15) {
+            return new ResponseEntity<>(UNAUTHORIZED, null, HttpStatus.UNAUTHORIZED);
+        }
+        
+        // FORBIDDEN device id has been blacklisted return 403 Forbidden
+        if(isForbidden(deviceId)) {
+            return new ResponseEntity<>(FORBIDDEN, null, HttpStatus.FORBIDDEN);
+        }
+
+        String deviceType = request.getParameter("dt");
+        
+        // Create a N1QL Select statement to get fingerprints
+        Statement queryStatement = createQueryStatement(request, deviceId, deviceType);        
+        Bucket bucket = COUCH_CLUSTER.openBucket("fingerprint");                        // Connect to the Couchebase cluster and open connection to the bucket
+        N1qlQueryResult queryResult = bucket.query(N1qlQuery.simple(queryStatement));   // Run query on the specific bucket
+        bucket.close();                                                                 // Disconnect from the bucket and cluster
+        
+        // Load response printer to print data into
+        PrintWriter printer = null;
+        try {
+            printer = response.getWriter();
+        } catch(IOException e) {
+            LOGGER.log(Level.SEVERE, "Could not load printer instance", e);
+        }
+        
+        // Parse N1QL rows into JSON objects
+        Fingerprint fingerprint;        // Used to parse json to Fingerprint to check consistency
+        int rowCount = 0;               // Count of rows parsed
+        List<N1qlQueryRow> rows = queryResult.allRows();    // Get all the rows from the query
+        // Check if there is any data and printer was initialized
+        if(rows.size() > 0 && printer != null) {
+            // For every row we print the data
+            printer.print("{\"total_rows\":"+ rows.size() +",\"rows\":[");     // Print start of an array
+            for (N1qlQueryRow row : rows) {
+                try {
+                    // Parse raw data into objects and to JSON string
+                    fingerprint = objectMapper.readValue(row.byteValue(), Fingerprint.class);
+                    printer.print("{\"id\":\""+ fingerprint.getId().toString() +"\", \"value\":");
+                    printer.print(objectMapper.writeValueAsString(fingerprint));
+                    printer.print("}");
+                    
+                    // Print delimiter between objects
+                    if(rowCount < (rows.size() - 1)) {
+                        printer.print(",");
+                    }
+                    rowCount++; // Increase the count of printed objects
+                } catch(IOException e) {
+                    LOGGER.log(Level.SEVERE, "Cannot convert N1ql row into JSONObject", e);
+                } 
+            }
+            printer.print("]}");     // Print an end of an array
+        }
+        
+        // Return 200 after data print completion
+        return new ResponseEntity<>(null, null, HttpStatus.OK);
+    }
+    
+    /**
      * Creates query for fingerprints. Can be midified by:
      * - Timestamp = Fingerprints with higher timestamp will be queried.
      * - Limit and offset - works the same as in SQL limiting the data.
@@ -311,7 +385,7 @@ public class FingerprintController {
      * @param request to get parameter data from
      * @return N1ql statement for fingerprints
      */
-    private Statement createQueryStatement(HttpServletRequest request) {
+    private Statement createQueryStatement(HttpServletRequest request, String deviceId, String deviceType) {
         // Query expression filtering deleted and not synchonized documents
         Expression whereEx = x("_deleted").ne(x("true"))
             .or( x("_deleted").isMissing() )
@@ -321,6 +395,16 @@ public class FingerprintController {
         String timestamp = request.getParameter("timestamp");
         if(timestamp != null && isLong(timestamp)) {     
             whereEx = whereEx.and(x("STR_TO_MILLIS(_sync.time_saved)")).gt(x(timestamp));
+        }
+        
+        // Add filtering by device id
+        if(deviceId != null) {
+            whereEx = whereEx.and(x("fingerprint.deviceRecord.telephone").eq(s(deviceId)));
+        }
+        
+        // Add filtering by device type (phone, wear)
+        if(deviceType != null) {
+            whereEx = whereEx.and(x("fingerprint.deviceRecord.type").eq(s(deviceType)));
         }
         
         // Parse the request body into an object
@@ -374,6 +458,13 @@ public class FingerprintController {
         if(selectStatement == null) {
             selectStatement = selectWhere;
         }
+        
+        LOGGER.log(Level.INFO, selectStatement.toString());
+        
+        //SELECT fingerprint.*, META(fingerprint).id, STR_TO_MILLIS(_sync.time_saved) as updateTime FROM `fingerprint` WHERE _deleted != true OR _deleted IS MISSING AND _sync IS NOT MISSING AND STR_TO_MILLIS(_sync.time_saved) > 1521038882130 ORDER BY _sync.time_saved ASC
+        
+        // SELECT fingerprint.*, META(fingerprint).id, STR_TO_MILLIS(_sync.time_saved) as updateTime FROM `fingerprint` WHERE _deleted != true OR _deleted IS MISSING AND _sync IS NOT MISSING AND STR_TO_MILLIS(_sync.time_saved) > 1521038882130 AND fingerprint.deviceRecord.telephone = 862963037663263 ORDER BY _sync.time_saved ASC
+        
         
         // Return completed statement
         return selectStatement;
@@ -471,4 +562,53 @@ public class FingerprintController {
             return false;
         }
     }
+    
+    /*private boolean createDumpFile(String fileName, N1qlQueryResult queryResult) {
+        // Try to load path
+        Path path = Paths.get(fileName);
+        
+        // Save data if te path exists
+        if(path != null) {
+            // Parse N1QL rows into JSON objects
+            Fingerprint fingerprint;        // Used to parse json to Fingerprint to check consistency
+            int rowCount = 0;               // Count of rows parsed
+            List<N1qlQueryRow> rows = queryResult.allRows();    // Get all the rows from the query
+            // Check if there is any data and printer was initialized
+            if(rows.size() > 0 ) {
+                // For every row we write the data
+                try (WritableByteChannel channel = Files.newByteChannel(path, StandardOpenOption.CREATE, 
+                        StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)) {
+                    ByteBuffer buf = ByteBuffer.allocate(8192);
+                    
+                    for (N1qlQueryRow row : rows) {
+                        // Parse raw data into objects and to JSON string
+                        fingerprint = objectMapper.readValue(row.byteValue(), Fingerprint.class);
+                        buf.put(objectMapper.writeValueAsString(fingerprint).getBytes());
+                        // Print delimiter between objects
+                        if(rowCount < (rows.size() - 1)) {
+                            buf.put(",".getBytes());
+                        }
+                        
+                        while (buf.hasRemaining()) {
+                            channel.write(buf);
+                        }
+
+                        buf.flip();
+                        
+                        rowCount++; // Increase the count of printed objects
+                    }
+                } catch(IOException e) {
+                    LOGGER.log(Level.SEVERE, "Cannot convert N1ql row into JSONObject", e);
+                    return false;
+                } 
+
+            }
+            
+
+            
+            return true;
+        }
+  
+        return false;
+    }*/
 }
