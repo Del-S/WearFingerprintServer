@@ -47,7 +47,6 @@ import org.springframework.core.io.Resource;
 import cz.uhk.beacon.fingerprint.api.model.Fingerprint;
 import cz.uhk.beacon.fingerprint.api.model.FingerprintMeta;
 import cz.uhk.beacon.fingerprint.api.model.LocationEntry;
-import javax.annotation.PostConstruct;
 
 /**
  * Fingerprint controller that works with couchbase database and sync gateway.
@@ -74,10 +73,12 @@ public class FingerprintController {
     @Value(value = "classpath:blacklist.txt")
     private Resource blacklist;
     
-    @PostConstruct
+    // Enable this if there is an authenitification for Couchbase bucket
+    // Usually it always is in new versions of this database
+    /*@PostConstruct
     public void init() {
         COUCH_CLUSTER.authenticate("admin", "admin123");
-    }
+    }*/
     
     /**
      * Route /fingerprints (GET) that loads synchonized fingerprints from specific Couchebase bucket.
